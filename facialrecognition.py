@@ -87,12 +87,12 @@ class EmotionCNN(nn.Module):
             nn.Conv2d(128, 256, kernel_size=3, padding=1),
             nn.ReLU(),
         )
+
         # hidden layers
         self.fc_layers = nn.Sequential(
             nn.Flatten(),
             nn.Linear(256 * (IMAGE_SIZE // 8) * (IMAGE_SIZE // 8), 256),
-            nn.ReLU(),
-            nn.Linear(256, 3)  # 3 emotion classes: happy, sad, surprise
+            nn.Linear(256, 4)  # 4 emotion classes: angry, happy, sad, surprise
         )
 
     def forward(self, x):
@@ -149,9 +149,9 @@ def training():
 # Much of this was taken from different cites like github, any comments I made are clarified
 def video():
     mod = EmotionCNN().to(device)
-    mod.load_state_dict(torch.load("256_out_4L_AC83.93"))
+    mod.load_state_dict(torch.load("256_ac73"))
 
-    emotion_labels = ["Happy", "Sad", "Surprised"]
+    emotion_labels = ["Angry", "Happy", "Sad", "Surprised"]
     # 0 is used for default camera, try 1 if it doesn't work
     camera = cv.VideoCapture(0)
 
@@ -202,23 +202,22 @@ def video():
         if cv.waitKey(100) & 0xFF == ord('0'):
             break
 
-
-
     # Release resources
     camera.release()
     cv.destroyAllWindows()
 
 
+
+
 while True:
     response = int(input("What would you like do?\n0: Quit\n"
-                         "1: Train a new  model\n2: Test specific image\n3: Video test\n"))
+                         "1: Train a new model\n2: Test specific image\n3: Video test\n"))
     match response:
         case 0:
             break
         case 1:
             training()
         case 2:
-            print("Press the 0 key in the video program to end")
             model = EmotionCNN().to(device)
             model.load_state_dict(torch.load("256_out_4L_AC83.93"))
             img = Image.open("images/sad.jpg").convert("RGB")
@@ -231,6 +230,7 @@ while True:
             print("Predicted class:", prediction.item())
             break
         case 3:
+            print("Press the 0 key in the video program to end")
             video()
             break
 
