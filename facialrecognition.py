@@ -218,6 +218,7 @@ while True:
         case 1:
             training()
         case 2:
+            print("Press the 0 key in the video program to end")
             model = EmotionCNN().to(device)
             model.load_state_dict(torch.load("256_out_4L_AC83.93"))
             img = Image.open("images/sad.jpg").convert("RGB")
