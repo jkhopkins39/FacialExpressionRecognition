@@ -92,7 +92,8 @@ class EmotionCNN(nn.Module):
         self.fc_layers = nn.Sequential(
             nn.Flatten(),
             nn.Linear(256 * (IMAGE_SIZE // 8) * (IMAGE_SIZE // 8), 256),
-            nn.Linear(256, 3)  # 4 emotion classes: angry, happy, sad, surprise
+            nn.ReLU(),
+            nn.Linear(256, 3)  # 3 emotion classes to match the saved model
         )
 
     def forward(self, x):
@@ -149,9 +150,9 @@ def training():
 # Much of this was taken from different cites like github, any comments I made are clarified
 def video():
     mod = EmotionCNN().to(device)
-    mod.load_state_dict(torch.load("3_feature_model"))
+    mod.load_state_dict(torch.load("256_ac73"))
 
-    emotion_labels = ["Happy", "Sad", "Surprised"]
+    emotion_labels = ["Angry", "Happy", "Sad", "Surprised"]
     # 0 is used for default camera, try 1 if it doesn't work
     camera = cv.VideoCapture(0)
 
@@ -220,14 +221,73 @@ while True:
         case 2:
             model = EmotionCNN().to(device)
             model.load_state_dict(torch.load("256_out_4L_AC83.93"))
-            img = Image.open("images/sad.jpg").convert("RGB")
-            input_tensor = transform(img).unsqueeze(0).to(device)  # Add batch dimension
-
-            # Run the model
-            output = model(input_tensor)
-            prediction = output.argmax(dim=1)
-
-            print("Predicted class:", prediction.item())
+            
+            # Get all images from the images folder
+            image_files = [f for f in os.listdir("images") if f.endswith(('.jpg', '.jpeg', '.png'))]
+            if not image_files:
+                print("No images found in the images folder!")
+                break
+                
+            # Set fixed dimensions
+            IMAGE_WIDTH = 200
+            IMAGE_HEIGHT = 200
+            LABEL_HEIGHT = 30
+            PADDING = 10
+            
+            # Create a window with fixed size
+            window_name = "Emotion Classification Results"
+            cv.namedWindow(window_name, cv.WINDOW_NORMAL)
+            cv.resizeWindow(window_name, IMAGE_WIDTH * len(image_files) + PADDING * (len(image_files) + 1),
+                          IMAGE_HEIGHT + LABEL_HEIGHT + PADDING * 2)
+            
+            # Create a blank canvas with space for images and labels
+            canvas_height = IMAGE_HEIGHT + LABEL_HEIGHT + PADDING * 2
+            canvas_width = IMAGE_WIDTH * len(image_files) + PADDING * (len(image_files) + 1)
+            canvas = np.ones((canvas_height, canvas_width, 3), dtype=np.uint8) * 255  # White background
+            
+            # Process each image
+            for idx, img_file in enumerate(image_files):
+                # Load and process image
+                img_path = os.path.join("images", img_file)
+                img = Image.open(img_path).convert("RGB")
+                input_tensor = transform(img).unsqueeze(0).to(device)
+                
+                # Get prediction
+                output = model(input_tensor)
+                prediction = output.argmax(dim=1).item()
+                
+                # Convert PIL image to OpenCV format and resize
+                img_cv = cv.cvtColor(np.array(img), cv.COLOR_RGB2BGR)
+                img_cv = cv.resize(img_cv, (IMAGE_WIDTH, IMAGE_HEIGHT))
+                
+                # Calculate position for image and label
+                x_pos = PADDING + idx * (IMAGE_WIDTH + PADDING)
+                y_pos = PADDING
+                
+                # Place image on canvas
+                canvas[y_pos:y_pos + IMAGE_HEIGHT, x_pos:x_pos + IMAGE_WIDTH] = img_cv
+                
+                # Add label below image
+                emotion_labels = ["Happy", "Sad", "Surprised"]
+                label = emotion_labels[prediction]
+                
+                # Calculate text position to center it below the image
+                text_size = cv.getTextSize(label, cv.FONT_HERSHEY_SIMPLEX, 0.8, 3)[0]  # Increased font size and thickness
+                text_x = x_pos + (IMAGE_WIDTH - text_size[0]) // 2
+                text_y = y_pos + IMAGE_HEIGHT + LABEL_HEIGHT - 5
+                
+                # Add text to canvas with white outline for better contrast
+                # First draw the outline
+                cv.putText(canvas, label, (text_x, text_y),
+                          cv.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 5)  # White outline
+                # Then draw the main text
+                cv.putText(canvas, label, (text_x, text_y),
+                          cv.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 3)  # Black text
+            
+            # Display the canvas
+            cv.imshow(window_name, canvas)
+            cv.waitKey(0)
+            cv.destroyAllWindows()
             break
         case 3:
             print("Press the 0 key in the video program to end")
