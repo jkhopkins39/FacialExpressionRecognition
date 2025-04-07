@@ -92,7 +92,7 @@ class EmotionCNN(nn.Module):
         self.fc_layers = nn.Sequential(
             nn.Flatten(),
             nn.Linear(256 * (IMAGE_SIZE // 8) * (IMAGE_SIZE // 8), 256),
-            nn.Linear(256, 4)  # 4 emotion classes: angry, happy, sad, surprise
+            nn.Linear(256, 3)  # 4 emotion classes: angry, happy, sad, surprise
         )
 
     def forward(self, x):
@@ -149,9 +149,9 @@ def training():
 # Much of this was taken from different cites like github, any comments I made are clarified
 def video():
     mod = EmotionCNN().to(device)
-    mod.load_state_dict(torch.load("256_ac73"))
+    mod.load_state_dict(torch.load("3_feature_model"))
 
-    emotion_labels = ["Angry", "Happy", "Sad", "Surprised"]
+    emotion_labels = ["Happy", "Sad", "Surprised"]
     # 0 is used for default camera, try 1 if it doesn't work
     camera = cv.VideoCapture(0)
 
