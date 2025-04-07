@@ -11,6 +11,9 @@ import matplotlib.pyplot as plt
 import cv2 as cv
 import pandas as pd
 import os
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, classification_report
+from tqdm import tqdm
 
 # Load the dataset
 # Dataframes consisting of their respective collections of happy, sad, and surprised faces
@@ -53,6 +56,14 @@ transform = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.5], std=[0.5])  # for grayscale
+])
+transformtrain = transforms.Compose([
+transforms.Grayscale(num_output_channels=1),
+    transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5], std=[0.5]), # for grayscale
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10)
 ])
 
 # Datasets
@@ -209,6 +220,129 @@ def video():
 
 
 
+
+# -----------------------------------------
+# 2. Feature Extractor (removes last FC)
+# -----------------------------------------
+class EmotionFeatureExtractor(nn.Module):
+    def __init__(self, cnn_model):
+        super(EmotionFeatureExtractor, self).__init__()
+        self.conv_layers = cnn_model.conv_layers
+        self.flatten = nn.Flatten()
+        self.fc1 = list(cnn_model.fc_layers.children())[1]
+
+    def forward(self, x):
+        x = self.conv_layers(x)
+        x = self.flatten(x)
+        x = self.fc1(x)
+        return x
+
+# -----------------------------------------
+# 3. Feature Extraction Function
+# -----------------------------------------
+def extract_features(dataloader, modelSVM):
+    features = []
+    labels = []
+    modelSVM.eval()
+    with torch.no_grad():
+        for images, targets in tqdm(dataloader):
+            images = images.to(device)
+            output = modelSVM(images)
+            features.append(output.cpu().numpy())
+            labels.append(targets.numpy())
+    return np.vstack(features), np.concatenate(labels)
+
+# -----------------------------------------
+# 4. Training the CNN
+# -----------------------------------------
+def train_cnn(train_loader, test_loader, save_path):
+    modelSVM = EmotionCNN().to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(modelSVM.parameters(), lr=0.001)
+    num_epochs = 20
+
+    for epoch in range(num_epochs):
+        modelSVM.train()
+        running_loss = 0.0
+        for images, labels in train_loader:
+            images, labels = images.to(device), labels.to(device)
+
+            optimizer.zero_grad()
+            outputs = modelSVM(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+
+        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {running_loss / len(train_loader):.4f}")
+
+    # Test Accuracy
+    modelSVM.eval()
+    correct, total = 0, 0
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = modelSVM(images)
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    print(f"Test Accuracy (CNN only): {100 * correct / total:.2f}%")
+
+    torch.save(modelSVM.state_dict(), save_path)
+    return modelSVM
+
+# -----------------------------------------
+# 5. Run CNN → Extract Features → Train SVM
+# -----------------------------------------
+def run_cnn_svm_pipeline(train_loader, test_loader):
+    cnn_save_path = "emotion_cnn.pth"
+
+    # Step 1: Train CNN
+    print("\n[1] Training CNN...")
+    modelSVM = train_cnn(train_loader, test_loader, cnn_save_path)
+
+    # Step 2: Load CNN and convert to feature extractor
+    print("\n[2] Extracting features from CNN...")
+    modelSVM.load_state_dict(torch.load(cnn_save_path))
+    feature_model = EmotionFeatureExtractor(modelSVM).to(device)
+
+    # Step 3: Extract features
+    X_train_features, y_train = extract_features(train_loader, feature_model)
+    X_test_features, y_test = extract_features(test_loader, feature_model)
+
+    # Step 4: Train and evaluate SVM
+    print("\n[3] Training SVM on CNN features...")
+    svm = SVC(kernel='rbf', C=1.0, gamma='scale')
+    svm.fit(X_train_features, y_train)
+
+    y_pred = svm.predict(X_test_features)
+    print("\n[4] SVM Results:")
+    print("SVM Accuracy:", accuracy_score(y_test, y_pred))
+    print(classification_report(y_test, y_pred))
+
+# -----------------------------------------
+# Entry point
+# -----------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 while True:
     response = int(input("What would you like do?\n0: Quit\n"
                          "1: Train a new model\n2: Test specific image\n3: Video test\n"))
@@ -232,6 +366,9 @@ while True:
         case 3:
             print("Press the 0 key in the video program to end")
             video()
+            break
+        case 4:
+            run_cnn_svm_pipeline(train_loader, test_loader)
             break
 
 
