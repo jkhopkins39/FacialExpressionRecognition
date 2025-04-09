@@ -1,49 +1,25 @@
+from typing import Concatenate
+
 import numpy as np
 import torchvision
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.transforms as transforms
+import pickle
+from torch.distributed.checkpoint import load_state_dict
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 from PIL import Image
 import matplotlib.pyplot as plt
 import cv2 as cv
 import pandas as pd
 import os
 from sklearn.svm import SVC
+
 from sklearn.metrics import accuracy_score, classification_report
 from tqdm import tqdm
-
-# Load the dataset
-# Dataframes consisting of their respective collections of happy, sad, and surprised faces
-# These images must first be mass converted to 2D arrays using OpenCV
-
-trainingSet = pd.DataFrame()
-testingSet = pd.DataFrame()
-
-def convert_images_to_arrays(image_folder):
-    image_list = []
-    for filename in os.listdir(image_folder):
-        if filename.endswith(('.jpg', '.jpeg', '.png')): # Check if the file is an image
-            img_path = os.path.join(image_folder, filename)
-            img = cv.imread(img_path)
-            if img is not None:
-                image_list.append(img)
-            else:
-                print(f"Error reading image: {filename}")
-    return np.array(image_list)
-
-def create_new_image_array(image_folder):
-#    image_folder = 'archiveDataset/train/happy'
-    image_arrays = convert_images_to_arrays(image_folder)
-    if image_arrays.size > 0:
-        print(f"Successfully converted {len(image_arrays)} images to arrays.")
-    else:
-        print("No images were converted.")
-
-
-
+from sklearn.model_selection import GridSearchCV
 
 # Uses Nvidia gpu to make things faster if you have one
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -62,7 +38,8 @@ transforms.Grayscale(num_output_channels=1),
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.5], std=[0.5]), # for grayscale
-    transforms.RandomHorizontalFlip(),
+    transforms.RandomHorizontalFlip(p=1.0),
+    #transforms.RandomVerticalFlip(),
     transforms.RandomRotation(10)
 ])
 
@@ -70,10 +47,12 @@ transforms.Grayscale(num_output_channels=1),
 train_dir = 'archiveDataset/train'
 test_dir = 'archiveDataset/test'
 
-train_dataset = datasets.ImageFolder(root=train_dir, transform=transform)
+train_original_dataset = datasets.ImageFolder(root=train_dir, transform=transform)
+train_transformed_data = datasets.ImageFolder(root=train_dir,transform=transformtrain)
+train_total_dataset = ConcatDataset([train_original_dataset,train_transformed_data])
 test_dataset = datasets.ImageFolder(root=test_dir, transform=transform)
 
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+train_loader = DataLoader(train_total_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
 
@@ -103,7 +82,8 @@ class EmotionCNN(nn.Module):
         self.fc_layers = nn.Sequential(
             nn.Flatten(),
             nn.Linear(256 * (IMAGE_SIZE // 8) * (IMAGE_SIZE // 8), 256),
-            nn.Linear(256, 3)  # 4 emotion classes: angry, happy, sad, surprise
+            nn.ReLU(),
+            nn.Linear(256, 5)  # 4 emotion classes: angry, happy, sad, surprise
         )
 
     def forward(self, x):
@@ -122,7 +102,7 @@ def training():
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     # Training loop
-    num_epochs = 20
+    num_epochs = 50
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
@@ -156,66 +136,6 @@ def training():
     # saves new model to be used later without recreating it
     # is saved to the main project folder
     torch.save(model.state_dict(), input("\nName of model"))
-
-# Much of this was taken from different cites like github, any comments I made are clarified
-def video():
-    mod = EmotionCNN().to(device)
-    mod.load_state_dict(torch.load("3_feature_model"))
-
-    emotion_labels = ["Happy", "Sad", "Surprised"]
-    # 0 is used for default camera, try 1 if it doesn't work
-    camera = cv.VideoCapture(0)
-
-    if not camera.isOpened():
-        print("Could not open camera.")
-        exit()
-
-    # Maddox - cv has a built-in face finder. this allows us to use it
-    haarcascade_path = os.path.join(cv.__path__[0], 'data', 'haarcascade_frontalface_default.xml')
-    face_cascade = cv.CascadeClassifier(haarcascade_path)
-
-    while True:
-        ret, frame = camera.read()
-        if not ret:
-            print("Failed to grab frame.")
-            break
-
-        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
-
-        padding = 60
-
-        for (x, y, a, b) in faces:
-            # Maddox - Box around face is too small when mouth is open, this reshapes the box to be bigger
-            x1 = max(x - padding, 0)
-            y1 = max(y - padding, 0)
-            x2 = min(x + a + padding, frame.shape[1])
-            y2 = min(y + b + padding, frame.shape[0])
-
-            face = gray[y:y + a, x:x + b]  # Crop face
-            face_resized = cv.resize(face, (48, 48))  # Resize to model input size
-            face_normalized = face_resized / 255.0
-            face_input = np.expand_dims(face_normalized, axis=(0, -1))  # shape (1, 48, 48, 1)
-            face_tensor = torch.tensor(face_input, dtype=torch.float32).permute(0, 3, 1, 2).to(device)
-            # shape becomes (1, 1, 48, 48) as expected by Conv2D
-
-            predict = mod(face_tensor)
-
-            emotion = emotion_labels[np.argmax(predict.detach().cpu().numpy())]
-
-            # Maddox - Draw rectangle and emotion label
-            cv.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv.putText(frame, emotion, (x, y - 10), cv.FONT_HERSHEY_SIMPLEX,
-                        0.9, (0, 255, 0), 2)
-            cv.imshow("Facial Expression Recognition", frame)
-
-        # Maddox - press the zero key to stop the program
-        if cv.waitKey(100) & 0xFF == ord('0'):
-            break
-
-    # Release resources
-    camera.release()
-    cv.destroyAllWindows()
 
 
 
@@ -259,7 +179,7 @@ def train_cnn(train_loader, test_loader, save_path):
     modelSVM = EmotionCNN().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(modelSVM.parameters(), lr=0.001)
-    num_epochs = 20
+    num_epochs = 50
 
     for epoch in range(num_epochs):
         modelSVM.train()
@@ -294,8 +214,8 @@ def train_cnn(train_loader, test_loader, save_path):
 # -----------------------------------------
 # 5. Run CNN → Extract Features → Train SVM
 # -----------------------------------------
-def run_cnn_svm_pipeline(train_loader, test_loader):
-    cnn_save_path = "emotion_cnn.pth"
+def run_cnn_svm(train_loader, test_loader):
+    cnn_save_path = "emotion_cnn_neutral_v2.pth"
 
     # Step 1: Train CNN
     print("\n[1] Training CNN...")
@@ -312,13 +232,57 @@ def run_cnn_svm_pipeline(train_loader, test_loader):
 
     # Step 4: Train and evaluate SVM
     print("\n[3] Training SVM on CNN features...")
-    svm = SVC(kernel='rbf', C=1.0, gamma='scale')
-    svm.fit(X_train_features, y_train)
+    param_grid = {
+        'C': [.1,1,10,15],
+        'gamma': ['scale',.01],
+        'kernel': ['rbf']
+    }
 
-    y_pred = svm.predict(X_test_features)
+    svm = SVC()
+    grid = GridSearchCV(svm, param_grid, cv=3, verbose=3, n_jobs=-1)
+    grid.fit(X_train_features, y_train)
+
+    print("Best SVM params:", grid.best_params_)
+    y_pred = grid.predict(X_test_features)
+
     print("\n[4] SVM Results:")
     print("SVM Accuracy:", accuracy_score(y_test, y_pred))
     print(classification_report(y_test, y_pred))
+
+def run_svm(test_loader, mod_pth):
+    model_svm = EmotionCNN().to(device)
+    model_svm.load_state_dict(torch.load(mod_pth))
+    model_svm.eval()
+
+    feature_model = EmotionFeatureExtractor(model_svm).to(device)
+
+    # Step 3: Extract features
+    X_train_features, y_train = extract_features(train_loader, feature_model)
+    X_test_features, y_test = extract_features(test_loader, feature_model)
+
+    # Step 4: Train and evaluate SVM
+    print("\n[3] Training SVM on CNN features...")
+    param_grid = {
+        'C': [.1,1,10],
+        'gamma': ['scale',.01],
+        'kernel': ['rbf']
+    }
+
+    svm = SVC(probability=True)
+    print("Parameter grid:", param_grid)
+    grid = GridSearchCV(svm, param_grid, cv=3, verbose=3, n_jobs=-1)
+    grid.fit(X_train_features, y_train)
+
+    print("Best SVM params:", grid.best_params_)
+    y_pred = grid.predict(X_test_features)
+
+    print("\n[4] SVM Results:")
+    print("SVM Accuracy:", accuracy_score(y_test, y_pred))
+    print(classification_report(y_test, y_pred))
+
+    with open("svm_model_neutral_v2", 'wb') as f:
+        pickle.dump(grid.best_estimator_, f)
+    print("SVM model saved to:", "svm_model_neutral_v2")
 
 # -----------------------------------------
 # Entry point
@@ -328,6 +292,89 @@ def run_cnn_svm_pipeline(train_loader, test_loader):
 
 
 
+
+
+
+
+
+
+def video():
+    mod = EmotionCNN().to(device)
+    mod.load_state_dict(torch.load("emotion_cnn_neutral_v2.pth"))
+    mod.eval()
+    feature_model = EmotionFeatureExtractor(mod).to(device)
+    with open("svm_model_neutral_v2", 'rb') as f:
+        svm_model = pickle.load(f)
+    emotion_labels = ["Angry", "Happy", "Neutral", "Sad", "Surprised"]
+    # 0 is used for default camera, try 1 if it doesn't work
+    camera = cv.VideoCapture(0)
+
+    if not camera.isOpened():
+        print("Could not open camera.")
+        exit()
+
+    # Use OpenCV's Haar cascade for face detection.
+    haarcascade_path = os.path.join(cv.__path__[0], 'data', 'haarcascade_frontalface_default.xml')
+    face_cascade = cv.CascadeClassifier(haarcascade_path)
+
+    while True:
+        ret, frame = camera.read()
+        if not ret:
+            print("Failed to grab frame.")
+            break
+
+        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+
+        padding = 50
+
+        for (x, y, a, b) in faces:
+            # Expand the detected face box with some padding.
+            x1 = max(x - padding, 0)
+            y1 = max(y - padding, 0)
+            x2 = min(x + a + padding, frame.shape[1])
+            y2 = min(y + b + padding, frame.shape[0])
+
+            # Crop the face from the gray scale frame.
+            face = gray[y:y + a, x:x + b]
+            face_resized = cv.resize(face, (48, 48))  # Resize to match model input size.
+            face_normalized = face_resized / 255.0
+            face_input = np.expand_dims(face_normalized, axis=(0, -1))  # shape becomes (1, 48, 48, 1)
+            face_tensor = torch.tensor(face_input, dtype=torch.float32).permute(0, 3, 1, 2).to(device)
+            # Now face_tensor shape is (1, 1, 48, 48)
+
+            # Extract features using the CNN feature extractor.
+            with torch.no_grad():
+                features = feature_model(face_tensor)
+            features_np = features.cpu().numpy()
+
+            # Get prediction probabilities from the SVM. This requires the model was trained with probability=True.
+            probs = svm_model.predict_proba(features_np)[0]
+            predicted_index = np.argmax(probs)
+            emotion = emotion_labels[predicted_index]
+
+            # Draw the bounding box and the predicted emotion label.
+            cv.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            cv.putText(frame, emotion, (x, y - 10), cv.FONT_HERSHEY_SIMPLEX,
+                       0.9, (0, 255, 0), 2)
+
+            # Draw the confidence levels for each emotion below the bounding box.
+            start_y = y2 + 20  # Starting Y coordinate for the text.
+            for i, label in enumerate(emotion_labels):
+                text = f"{label}: {probs[i] * 100:.1f}%"
+                cv.putText(frame, text, (x1, start_y + i * 20),
+                           cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        # Show the frame with overlays.
+        cv.imshow("Facial Expression Recognition", frame)
+
+        # Press '0' to stop the program.
+        if cv.waitKey(100) & 0xFF == ord('0'):
+            break
+
+    # Release the camera resources.
+    camera.release()
+    cv.destroyAllWindows()
 
 
 
@@ -345,7 +392,7 @@ def run_cnn_svm_pipeline(train_loader, test_loader):
 
 while True:
     response = int(input("What would you like do?\n0: Quit\n"
-                         "1: Train a new model\n2: Test specific image\n3: Video test\n"))
+                         "1: Train a new CNN model\n2: Test specific image\n3: Video test\n4: Train a new CNN and SVM\n"))
     match response:
         case 0:
             break
@@ -368,8 +415,12 @@ while True:
             video()
             break
         case 4:
-            run_cnn_svm_pipeline(train_loader, test_loader)
+            run_cnn_svm(train_loader, test_loader)
             break
+        case 5:
+            run_svm(train_loader,"emotion_cnn_neutral_v2.pth")
+            break
+
 
 
 
