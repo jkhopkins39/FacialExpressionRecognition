@@ -1,5 +1,4 @@
 from typing import Concatenate
-
 import numpy as np
 import torchvision
 import torch
@@ -16,12 +15,12 @@ import cv2 as cv
 import pandas as pd
 import os
 from sklearn.svm import SVC
-
 from sklearn.metrics import accuracy_score, classification_report
 from tqdm import tqdm
 from sklearn.model_selection import GridSearchCV
 
 # Uses Nvidia gpu to make things faster if you have one
+# will use cpu if your gpu is not Nvidia
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 IMAGE_SIZE = 48
@@ -56,7 +55,7 @@ train_loader = DataLoader(train_total_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
 
-# Define CNN model, its inheriting
+# Define CNN model
 class EmotionCNN(nn.Module):
     def __init__(self):
         super(EmotionCNN, self).__init__()
@@ -83,7 +82,7 @@ class EmotionCNN(nn.Module):
             nn.Flatten(),
             nn.Linear(256 * (IMAGE_SIZE // 8) * (IMAGE_SIZE // 8), 256),
             nn.ReLU(),
-            nn.Linear(256, 5)  # 4 emotion classes: angry, happy, sad, surprise
+            nn.Linear(256, 5)  # 5 emotion classes: angry, happy, sad, surprise, neutral
         )
 
     def forward(self, x):
@@ -211,9 +210,7 @@ def train_cnn(train_loader, test_loader, save_path):
     torch.save(modelSVM.state_dict(), save_path)
     return modelSVM
 
-# -----------------------------------------
-# 5. Run CNN → Extract Features → Train SVM
-# -----------------------------------------
+
 def run_cnn_svm(train_loader, test_loader):
     cnn_save_path = "emotion_cnn_neutral_v2.pth"
 
@@ -256,11 +253,11 @@ def run_svm(test_loader, mod_pth):
 
     feature_model = EmotionFeatureExtractor(model_svm).to(device)
 
-    # Step 3: Extract features
+
     X_train_features, y_train = extract_features(train_loader, feature_model)
     X_test_features, y_test = extract_features(test_loader, feature_model)
 
-    # Step 4: Train and evaluate SVM
+
     print("\n[3] Training SVM on CNN features...")
     param_grid = {
         'C': [.1,1,10],
@@ -283,18 +280,6 @@ def run_svm(test_loader, mod_pth):
     with open("svm_model_neutral_v2", 'wb') as f:
         pickle.dump(grid.best_estimator_, f)
     print("SVM model saved to:", "svm_model_neutral_v2")
-
-# -----------------------------------------
-# Entry point
-# -----------------------------------------
-
-
-
-
-
-
-
-
 
 
 
@@ -348,7 +333,7 @@ def video():
                 features = feature_model(face_tensor)
             features_np = features.cpu().numpy()
 
-            # Get prediction probabilities from the SVM. This requires the model was trained with probability=True.
+            # Get prediction probabilities from the SVM
             probs = svm_model.predict_proba(features_np)[0]
             predicted_index = np.argmax(probs)
             emotion = emotion_labels[predicted_index]
@@ -377,22 +362,9 @@ def video():
     cv.destroyAllWindows()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 while True:
     response = int(input("What would you like do?\n0: Quit\n"
-                         "1: Train a new CNN model\n2: Test specific image\n3: Video test\n4: Train a new CNN and SVM\n"))
+                         "1: Train a new CNN model\n2: Test specific image\n3: Video test\n4: Train a new CNN and SVM\n5: Train new SVM using current cnn\n"))
     match response:
         case 0:
             break
