@@ -285,7 +285,7 @@ def run_svm(test_loader, mod_pth):
 
 def video():
     mod = EmotionCNN().to(device)
-    mod.load_state_dict(torch.load("emotion_cnn_neutral_v2.pth"))
+    mod.load_state_dict(torch.load("emotion_cnn_neutral_v2.pth", map_location=torch.device('cpu')))
     mod.eval()
     feature_model = EmotionFeatureExtractor(mod).to(device)
     with open("svm_model_neutral_v2", 'rb') as f:
